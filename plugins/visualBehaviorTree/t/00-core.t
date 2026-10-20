@@ -1,0 +1,35 @@
+use strict;
+use warnings;
+use Test::More;
+use JSON::PP;
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+use VisualBT::Validator qw(validate_graph);
+use VisualBT::Engine qw(tick);
+my $catalog=JSON::PP->new->decode(do {local $/;open my $f,'<',"$FindBin::Bin/../catalog/nodes.schema.json" or die $!;<$f>});
+sub node {my($id,$type,$params,$children)=@_;return{id=>$id,type=>$type,params=>$params||{},children=>$children||[]}}
+my $g={schemaVersion=>1,profileId=>'test',name=>'Test',description=>'',mode=>'shadow',managedDomains=>[],rootId=>'root',nodes=>[
+ node('root','PrioritySelector',{},['high','low']),node('high','Sequence',{},['cond','wait']),node('cond','WeightPercent',{operator=>'>=',percent=>48}),node('wait','Wait',{durationMs=>100}),node('low','Idle') ]};
+my($ok,$errs)=validate_graph($g,$catalog);ok($ok,'valid graph accepted') or diag join("\n",@$errs);
+my $rt={nodes=>{}};my $r=tick($g,{weightPercent=>49,now=>10},$rt);is($r->{status},'RUNNING','sequence waits asynchronously');
+$r=tick($g,{weightPercent=>49,now=>10.05},$rt);is($r->{status},'RUNNING','priority selector remains on first running branch');
+$r=tick($g,{weightPercent=>47,now=>10.3},$rt);is($r->{status},'RUNNING','reactive priority selects fallback');
+my $bad={%$g,nodes=>[@{$g->{nodes}},node('orphan','Idle')]};($ok,$errs)=validate_graph($bad,$catalog);ok(!$ok,'orphan rejected');
+$bad={%$g,nodes=>[@{$g->{nodes}}]};$bad->{nodes}[0]{children}=['root'];($ok,$errs)=validate_graph($bad,$catalog);ok(!$ok,'cycle rejected');
+my $errgraph={schemaVersion=>1,profileId=>'x',name=>'x',description=>'',mode=>'shadow',managedDomains=>[],rootId=>'inv',nodes=>[node('inv','Inverter',{},['missing'])]};
+$r=tick($errgraph,{},{});is($r->{status},'ERROR','ERROR is never inverted to success');
+my $hpgraph={schemaVersion=>1,profileId=>'x',name=>'x',description=>'',mode=>'shadow',managedDomains=>[],rootId=>'hp',nodes=>[node('hp','CharacterHp',{operator=>'<',percent=>50})]};
+$r=tick($hpgraph,{},{});is($r->{status},'ERROR','sensor ausente não é inferido');
+$r=tick($hpgraph,{hpPercent=>49},{});is($r->{status},'SUCCESS','sensor presente é avaliado');
+my $actiongraph={schemaVersion=>1,profileId=>'x',name=>'x',description=>'',mode=>'shadow',managedDomains=>[],rootId=>'action',nodes=>[node('action','AttackTarget',{monsterIds=>[1410],timeoutMs=>1000})]};
+$r=tick($actiongraph,{},{});is($r->{status},'RUNNING','ação prevista no shadow permanece pendente');is($r->{runtime}{actionsStarted},0,'shadow não despacha ação externa');
+my $losgraph={schemaVersion=>1,profileId=>'x',name=>'x',description=>'',mode=>'shadow',managedDomains=>[],rootId=>'los',nodes=>[node('los','MonsterNearby',{monsterIds=>[],distance=>9,requireLOS=>1,count=>1})]};
+$r=tick($losgraph,{monstersVisible=>[{nameId=>1410,distance=>2}]},{});is($r->{status},'ERROR','LOS ausente não é tratado como LOS bloqueado');
+my $boolgraph=JSON::PP->new->decode('{"schemaVersion":1,"profileId":"bool","name":"bool","description":"","mode":"shadow","managedDomains":[],"rootId":"sit","nodes":[{"id":"sit","type":"IsSitting","params":{"expected":true},"children":[]}]}');
+($ok,$errs)=validate_graph($boolgraph,$catalog);ok($ok,'booleano JSON validado') or diag join("\n",@$errs);
+$boolgraph->{unexpected}=1;($ok,$errs)=validate_graph($boolgraph,$catalog);ok(!$ok,'campo de topo inesperado rejeitado');
+my $assist={%$actiongraph,mode=>'assist'};($ok,$errs)=validate_graph($assist,$catalog);ok(!$ok,'modo assist bloqueado por capacidades indisponíveis');
+my $invgraph={schemaVersion=>1,profileId=>'x',name=>'x',description=>'',mode=>'shadow',managedDomains=>[],rootId=>'inv',nodes=>[node('inv','Inverter',{},['cond']),node('cond','WeightPercent',{operator=>'>=',percent=>48})]};
+$r=tick($invgraph,{weightPercent=>47},{});is($r->{status},'SUCCESS','Inverter: FAILURE becomes SUCCESS');
+$r=tick($invgraph,{weightPercent=>49},{});is($r->{status},'FAILURE','Inverter: SUCCESS becomes FAILURE exactly once');
+done_testing;
