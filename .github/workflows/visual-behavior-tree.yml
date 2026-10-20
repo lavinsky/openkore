@@ -1,0 +1,50 @@
+name: Visual Behavior Tree
+
+on:
+  push:
+    paths:
+      - ".github/workflows/visual-behavior-tree.yml"
+      - "plugins/visualBehaviorTree/**"
+      - "control/behaviorTree/**"
+  pull_request:
+    paths:
+      - ".github/workflows/visual-behavior-tree.yml"
+      - "plugins/visualBehaviorTree/**"
+      - "control/behaviorTree/**"
+
+permissions:
+  contents: read
+
+jobs:
+  perl-engine:
+    name: Perl engine and native adapters (mocked)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run behavior tree tests
+        run: prove -v -Iplugins/visualBehaviorTree/lib plugins/visualBehaviorTree/t/*.t
+      - name: Check Perl modules
+        run: |
+          perl -c plugins/visualBehaviorTree/lib/VisualBT/Engine.pm
+          perl -c plugins/visualBehaviorTree/lib/VisualBT/NativeTasks.pm
+          perl -c plugins/visualBehaviorTree/lib/VisualBT/OpenKoreSensors.pm
+          perl -c plugins/visualBehaviorTree/bin/simulate.pl
+  visual-editor:
+    name: TypeScript editor and local API
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/visualBehaviorTree/editor
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: plugins/visualBehaviorTree/editor/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Build editor
+        run: npm run build
+      - name: Run editor/API tests
+        run: npm test
